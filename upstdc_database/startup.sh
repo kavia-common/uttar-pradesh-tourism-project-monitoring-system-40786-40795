@@ -1,76 +1,75 @@
 #!/bin/bash
+set -e
 
-# MongoDB startup script following the same pattern
-DB_NAME="myapp"
-DB_USER="appuser"
-DB_PASSWORD="dbuser123"
-DB_PORT="5000"
+# Standardized MongoDB startup using env vars:
+# - MONGODB_URL: mongodb://USER:PASSWORD@HOST:PORT/?authSource=admin
+# - MONGODB_DB: database name (e.g., myapp)
+#
+# Defaults for local development if not provided
+MONGODB_URL="${MONGODB_URL:-mongodb://appuser:dbuser123@localhost:5000/?authSource=admin}"
+MONGODB_DB="${MONGODB_DB:-myapp}"
+
+# Parse URL parts needed by local mongod and user creation
+# Expect format: mongodb://USER:PASSWORD@HOST:PORT/?authSource=admin
+URL_NO_PREFIX="${MONGODB_URL#mongodb://}"
+CRED_HOST_PORT="${URL_NO_PREFIX%%/*}"     # user:pwd@host:port OR host:port if no cred
+QUERY_PART="${URL_NO_PREFIX#*/}"          # ?authSource=admin (ignored)
+if [[ "$CRED_HOST_PORT" == *"@"* ]]; then
+  CREDS="${CRED_HOST_PORT%@*}"
+  HOST_PORT="${CRED_HOST_PORT#*@}"
+  DB_USER="${CREDS%%:*}"
+  DB_PASSWORD="${CREDS#*:}"
+else
+  HOST_PORT="${CRED_HOST_PORT}"
+  DB_USER="appuser"
+  DB_PASSWORD="dbuser123"
+fi
+DB_HOST="${HOST_PORT%%:*}"
+DB_PORT="${HOST_PORT##*:}"
+DB_HOST="${DB_HOST:-localhost}"
+DB_PORT="${DB_PORT:-5000}"
 
 echo "Starting MongoDB setup..."
+echo "Using MONGODB_URL=${MONGODB_URL}"
+echo "Using MONGODB_DB=${MONGODB_DB}"
 
 # Check if MongoDB is already running
-if mongosh --port ${DB_PORT} --eval "db.adminCommand('ping')" > /dev/null 2>&1; then
-    echo "MongoDB is already running on port ${DB_PORT}!"
-    
-    # Try to verify the database exists and user can connect
-    if mongosh mongodb://${DB_USER}:${DB_PASSWORD}@localhost:${DB_PORT}/${DB_NAME}?authSource=admin --eval "db.getName()" > /dev/null 2>&1; then
-        echo "Database ${DB_NAME} is accessible with user ${DB_USER}."
+if mongosh --host "${DB_HOST}" --port "${DB_PORT}" --eval "db.adminCommand('ping')" > /dev/null 2>&1; then
+    echo "MongoDB is already running on ${DB_HOST}:${DB_PORT}!"
+    if mongosh "${MONGODB_URL}${MONGODB_URL*+/$MONGODB_DB}" --eval "db.getName()" > /dev/null 2>&1; then
+        echo "Database ${MONGODB_DB} is accessible."
     else
         echo "MongoDB is running but authentication might not be configured."
     fi
-    
     echo ""
-    echo "Database: ${DB_NAME}"
-    echo "Admin user: ${DB_USER} (password: ${DB_PASSWORD})"
-    echo "App user: appuser (password: ${DB_PASSWORD})"
-    echo "Port: ${DB_PORT}"
+    echo "Database: ${MONGODB_DB}"
+    echo "Connection URL: ${MONGODB_URL}"
     echo ""
-    
-    # Check if connection info file exists
-    if [ -f "db_connection.txt" ]; then
-        echo "To connect to the database, use:"
-        echo "$(cat db_connection.txt)"
-    else
-        echo "To connect to the database, use:"
-        echo "mongosh mongodb://${DB_USER}:${DB_PASSWORD}@localhost:${DB_PORT}/${DB_NAME}?authSource=admin"
-    fi
-    
+    echo "To connect to the database, use:"
+    echo "mongosh \"${MONGODB_URL}${MONGODB_URL*+/$MONGODB_DB}${MONGODB_URL*+?authSource=admin}\""
     echo ""
     echo "Script stopped - MongoDB server already running."
     exit 0
 fi
 
-# Check if MongoDB is running on a different port
+# If mongod already running on different port, stop it (local-only safety)
 if pgrep -x mongod > /dev/null; then
-    # Get the port of the running MongoDB instance
-    MONGO_PID=$(pgrep -x mongod)
-    CURRENT_PORT=$(sudo lsof -Pan -p $MONGO_PID -i | grep -o ":[0-9]*" | grep -o "[0-9]*" | head -1)
-    
-    if [ "$CURRENT_PORT" = "${DB_PORT}" ]; then
-        echo "MongoDB is already running on port ${DB_PORT}!"
-        echo "Script stopped - server already running."
-        exit 0
-    else
-        echo "MongoDB is running on different port ($CURRENT_PORT), stopping it..."
-        sudo pkill -x mongod
-        sleep 2
-    fi
+    echo "MongoDB appears to be running on a different port; attempting graceful stop..."
+    sudo pkill -x mongod || true
+    sleep 2
 fi
 
 # Clean up any existing socket files
-sudo rm -f /tmp/mongodb-*.sock 2>/dev/null
+sudo rm -f /tmp/mongodb-*.sock 2>/dev/null || true
 
-# Start MongoDB server without authentication initially using nohup
-echo "Starting MongoDB server..."
+# Start local MongoDB server (bind to localhost)
+echo "Starting MongoDB server on ${DB_HOST}:${DB_PORT}..."
 nohup sudo mongod --dbpath /var/lib/mongodb --port ${DB_PORT} --bind_ip 127.0.0.1 --unixSocketPrefix /var/run/mongodb > /var/lib/mongodb/mongod.log 2>&1 &
 
 # Wait for MongoDB to start
 echo "Waiting for MongoDB to start..."
-sleep 5
-
-# Check if MongoDB is running
 for i in {1..15}; do
-    if mongosh --port ${DB_PORT} --eval "db.adminCommand('ping')" > /dev/null 2>&1; then
+    if mongosh --host "${DB_HOST}" --port "${DB_PORT}" --eval "db.adminCommand('ping')" > /dev/null 2>&1; then
         echo "MongoDB is ready!"
         break
     fi
@@ -78,60 +77,56 @@ for i in {1..15}; do
     sleep 2
 done
 
-# Create database and user
-echo "Setting up database and user..."
-mongosh --port ${DB_PORT} << EOF
-// Switch to admin database for user creation
+# Derive admin user to create (use provided DB_USER from URL or default)
+ADMIN_USER="${DB_USER}"
+ADMIN_PWD="${DB_PASSWORD}"
+APP_USER="appuser"
+APP_PWD="${DB_PASSWORD}"
+
+# Create admin and app users
+echo "Setting up admin and app users..."
+mongosh --host "${DB_HOST}" --port "${DB_PORT}" << EOF
 use admin
-
-// Create admin user if it doesn't exist
-if (db.getUser("${DB_USER}") == null) {
-    db.createUser({
-        user: "${DB_USER}",
-        pwd: "${DB_PASSWORD}",
-        roles: [
-            { role: "userAdminAnyDatabase", db: "admin" },
-            { role: "readWriteAnyDatabase", db: "admin" }
-        ]
-    });
+if (db.getUser("${ADMIN_USER}") == null) {
+  db.createUser({
+    user: "${ADMIN_USER}",
+    pwd: "${ADMIN_PWD}",
+    roles: [
+      { role: "userAdminAnyDatabase", db: "admin" },
+      { role: "readWriteAnyDatabase", db: "admin" }
+    ]
+  });
 }
-
-// Switch to target database
-use ${DB_NAME}
-
-// Create application user for specific database
-if (db.getUser("appuser") == null) {
-    db.createUser({
-        user: "appuser",
-        pwd: "${DB_PASSWORD}",
-        roles: [
-            { role: "readWrite", db: "${DB_NAME}" }
-        ]
-    });
+use ${MONGODB_DB}
+if (db.getUser("${APP_USER}") == null) {
+  db.createUser({
+    user: "${APP_USER}",
+    pwd: "${APP_PWD}",
+    roles: [{ role: "readWrite", db: "${MONGODB_DB}" }]
+  });
 }
-
 print("MongoDB setup complete!");
 EOF
 
 # Save connection command to a file
-echo "mongosh mongodb://${DB_USER}:${DB_PASSWORD}@localhost:${DB_PORT}/${DB_NAME}?authSource=admin" > db_connection.txt
+echo "mongosh ${MONGODB_URL}${MONGODB_URL*+/$MONGODB_DB}" > db_connection.txt
 echo "Connection string saved to db_connection.txt"
 
-# Save environment variables to a file
+# Save environment variables for db viewer and other tools
 cat > db_visualizer/mongodb.env << EOF
-export MONGODB_URL="mongodb://${DB_USER}:${DB_PASSWORD}@localhost:${DB_PORT}/?authSource=admin"
-export MONGODB_DB="${DB_NAME}"
+export MONGODB_URL="${MONGODB_URL}"
+export MONGODB_DB="${MONGODB_DB}"
 EOF
 
 echo "Running database initialization (collections, indexes, seed)..."
-# Export env vars for init script
-export MONGODB_DB="${DB_NAME}"
+# Export env vars for init script (scripts/init_db.js expects these)
+export MONGODB_DB="${MONGODB_DB}"
 export DB_PORT="${DB_PORT}"
-export DB_USER="${DB_USER}"
-export DB_PASSWORD="${DB_PASSWORD}"
+export DB_USER="${ADMIN_USER}"
+export DB_PASSWORD="${ADMIN_PWD}"
 
-# Execute init script with mongosh; it will connect using admin for index creation and appuser for seeding
-if mongosh --port ${DB_PORT} --file scripts/init_db.js --quiet; then
+# Execute init script with mongosh
+if mongosh --host "${DB_HOST}" --port "${DB_PORT}" --file scripts/init_db.js --quiet; then
     echo "✓ Database initialization completed."
 else
     echo "⚠ Database initialization encountered issues. Check logs above."
@@ -139,20 +134,14 @@ fi
 
 echo ""
 echo "MongoDB setup complete!"
-echo "Database: ${DB_NAME}"
-echo "Admin user: ${DB_USER} (password: ${DB_PASSWORD})"
-echo "App user: appuser (password: ${DB_PASSWORD})"
+echo "Database: ${MONGODB_DB}"
+echo "Connection URL: ${MONGODB_URL}"
 echo "Port: ${DB_PORT}"
 echo ""
-
 echo "Environment variables saved to db_visualizer/mongodb.env"
 echo "To use with Node.js viewer, run: source db_visualizer/mongodb.env"
-
-echo "To connect to the database, use one of the following commands:"
-echo "mongosh -u ${DB_USER} -p ${DB_PASSWORD} --port ${DB_PORT} --authenticationDatabase admin ${DB_NAME}"
-echo "$(cat db_connection.txt)"
-
-# MongoDB continues running in background
+echo "To connect to the database, use:"
+echo "mongosh \"${MONGODB_URL}${MONGODB_URL*+/$MONGODB_DB}\""
 echo ""
 echo "MongoDB is running in the background."
 echo "You can now start your application."

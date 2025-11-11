@@ -3,7 +3,9 @@
  * Initialize MongoDB database: collections, indexes, and seed data.
  *
  * Usage:
- *  MONGODB_URL and MONGODB_DB can be provided via environment or defaults from startup.sh.
+ *  Standardized env:
+ *    - MONGODB_DB: Target database name
+ *    - DB_PORT, DB_USER, DB_PASSWORD are exported by startup.sh for local admin/app connections
  *  Run with: mongosh --file scripts/init_db.js --quiet
  *
  * Security:
