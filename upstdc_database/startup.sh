@@ -148,25 +148,77 @@ VISUALIZER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/db_visualizer"
   cd "${VISUALIZER_DIR}"
   # shellcheck disable=SC1091
   source mongodb.env
+  # Ensure listener binds to all interfaces on port 3020
   export PORT="${PORT:-3020}"
   export HOST="0.0.0.0"
+
+  # Log location
+  LOG_FILE="/tmp/db_visualizer.log"
+
+  echo "[db_visualizer] Launching server (PORT=${PORT}, HOST=${HOST})" | tee -a "${LOG_FILE}"
+
+  # Install dependencies if node modules missing (non-interactive, best-effort)
+  if [ ! -d "node_modules" ] && command -v npm >/dev/null 2>&1; then
+    echo "[db_visualizer] node_modules missing. Installing dependencies..." | tee -a "${LOG_FILE}"
+    npm ci --only=production >> "${LOG_FILE}" 2>&1 || npm install --production >> "${LOG_FILE}" 2>&1 || true
+  fi
+
+  # Prefer npm, fallback to direct node server.js
   if command -v npm >/dev/null 2>&1; then
-    nohup npm run start >/tmp/db_visualizer.log 2>&1 &
+    nohup npm run start >> "${LOG_FILE}" 2>&1 &
+    VIS_PID=$!
+    echo "[db_visualizer] Started via npm (pid=${VIS_PID})" | tee -a "${LOG_FILE}"
+  elif command -v node >/dev/null 2>&1; then
+    nohup node server.js >> "${LOG_FILE}" 2>&1 &
+    VIS_PID=$!
+    echo "[db_visualizer] Started via node (pid=${VIS_PID})" | tee -a "${LOG_FILE}"
   else
-    nohup node server.js >/tmp/db_visualizer.log 2>&1 &
+    echo "⚠ Node.js runtime not found. DB visualizer cannot start." | tee -a "${LOG_FILE}"
   fi
 ) || echo "⚠ Failed to launch DB visualizer. Check /tmp/db_visualizer.log"
 
-# Readiness: wait for visualizer to respond on 3020 (max ~30s)
+# Readiness: wait for visualizer to respond on 3020
+# Strategy:
+# 1) Try /health (if exists) then /api/databases then /
+# 2) Use 0.0.0.0 for binding but curl to 127.0.0.1 and localhost
+# 3) Retry up to 60s with detailed logs
 echo "Waiting for DB visualizer to become ready on port 3020..."
-for i in {1..15}; do
-  if curl -sSf "http://127.0.0.1:3020/api/databases" >/dev/null 2>&1; then
-    echo "✓ DB visualizer is ready on port 3020"
-    break
+READY=0
+for i in {1..30}; do
+  if curl -sf "http://127.0.0.1:3020/health" >/dev/null 2>&1; then
+    echo "✓ DB visualizer responded at /health"
+    READY=1; break
   fi
-  echo "Visualizer not ready yet... ($i/15)"
+  if curl -sf "http://127.0.0.1:3020/api/databases" >/dev/null 2>&1; then
+    echo "✓ DB visualizer responded at /api/databases"
+    READY=1; break
+  fi
+  if curl -sf "http://127.0.0.1:3020/" >/dev/null 2>&1; then
+    echo "✓ DB visualizer root path responded"
+    READY=1; break
+  fi
+  if curl -sf "http://localhost:3020/" >/dev/null 2>&1; then
+    echo "✓ DB visualizer root path responded (localhost)"
+    READY=1; break
+  fi
+  echo "Visualizer not ready yet... ($i/30). Tailing recent log lines:"
+  tail -n 10 /tmp/db_visualizer.log 2>/dev/null || echo "(no logs yet)"
   sleep 2
 done
+
+# If still not ready, print diagnostic info and do a final fallback check
+if [ "${READY}" -ne 1 ]; then
+  echo "⚠ DB visualizer did not become ready within timeout."
+  echo "Diagnostics:"
+  echo "- Process listing (node/npm):"
+  ps aux | grep -E "node|npm" | grep -v grep || true
+  echo "- Listening sockets on 3020:"
+  (command -v ss >/dev/null 2>&1 && ss -ltnp | grep ':3020') || (command -v netstat >/dev/null 2>&1 && netstat -ltnp | grep ':3020') || true
+  echo "- Last 50 lines of /tmp/db_visualizer.log:"
+  tail -n 50 /tmp/db_visualizer.log 2>/dev/null || echo "(no logs)"
+else
+  echo "✓ DB visualizer is ready on port 3020"
+fi
 
 echo "To use with Node.js viewer, env already sourced. Manual: source db_visualizer/mongodb.env"
 echo "To connect to the database, use:"

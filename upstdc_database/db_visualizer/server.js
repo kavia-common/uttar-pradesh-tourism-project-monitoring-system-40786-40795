@@ -340,6 +340,12 @@ const envInfo = {
 
 const PORT = process.env.PORT || 3020;
 const HOST = process.env.HOST || '0.0.0.0';
+
+// Simple health endpoint for readiness probes
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', uptime: process.uptime() });
+});
+
 app.listen(PORT, HOST, () => {
   console.log(`Database viewer running on http://${HOST}:${PORT}`);
   console.log('\nEnvironment variables expected:');
