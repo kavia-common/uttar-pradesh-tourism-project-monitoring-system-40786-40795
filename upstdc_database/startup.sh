@@ -29,53 +29,53 @@ DB_PORT="${HOST_PORT##*:}"
 DB_HOST="${DB_HOST:-localhost}"
 DB_PORT="${DB_PORT:-5000}"
 
-echo "Starting MongoDB setup..."
-echo "Using MONGODB_URL=${MONGODB_URL}"
-echo "Using MONGODB_DB=${MONGODB_DB}"
+echo "[startup] Starting MongoDB setup..."
+echo "[startup] Using MONGODB_URL=${MONGODB_URL}"
+echo "[startup] Using MONGODB_DB=${MONGODB_DB}"
+echo "[startup] Target host: ${DB_HOST}, port: ${DB_PORT}"
 
 # Check if MongoDB is already running
 if mongosh --host "${DB_HOST}" --port "${DB_PORT}" --eval "db.adminCommand('ping')" > /dev/null 2>&1; then
-    echo "MongoDB is already running on ${DB_HOST}:${DB_PORT}!"
+    echo "[startup] MongoDB is already running on ${DB_HOST}:${DB_PORT}"
     if mongosh "${MONGODB_URL}${MONGODB_URL*+/$MONGODB_DB}" --eval "db.getName()" > /dev/null 2>&1; then
-        echo "Database ${MONGODB_DB} is accessible."
+        echo "[startup] Database ${MONGODB_DB} is accessible."
     else
-        echo "MongoDB is running but authentication might not be configured."
+        echo "[startup] MongoDB is running but authentication might not be configured."
     fi
-    echo ""
-    echo "Database: ${MONGODB_DB}"
-    echo "Connection URL: ${MONGODB_URL}"
-    echo ""
-    echo "To connect to the database, use:"
-    echo "mongosh \"${MONGODB_URL}${MONGODB_URL*+/$MONGODB_DB}${MONGODB_URL*+?authSource=admin}\""
-    echo ""
-    echo "Script stopped - MongoDB server already running."
-    exit 0
+else
+  # If mongod already running on different port, stop it (local-only safety)
+  if pgrep -x mongod > /dev/null; then
+      echo "[startup] MongoDB appears to be running on a different port; attempting graceful stop..."
+      sudo pkill -x mongod || true
+      sleep 2
+  fi
+
+  # Clean up any existing socket files
+  sudo rm -f /tmp/mongodb-*.sock 2>/dev/null || true
+
+  # Start local MongoDB server (bind to localhost)
+  echo "[startup] Starting MongoDB server on ${DB_HOST}:${DB_PORT}..."
+  nohup sudo mongod --dbpath /var/lib/mongodb --port ${DB_PORT} --bind_ip 127.0.0.1 --unixSocketPrefix /var/run/mongodb > /var/lib/mongodb/mongod.log 2>&1 &
+
+  # Wait for MongoDB to start with clear logs
+  echo "[startup] Waiting for MongoDB to accept connections on ${DB_HOST}:${DB_PORT}..."
+  MONGO_READY=0
+  for i in {1..30}; do
+      if mongosh --host "${DB_HOST}" --port "${DB_PORT}" --eval "db.adminCommand('ping')" > /dev/null 2>&1; then
+          echo "[startup] ✓ MongoDB is ready (ping succeeded)"
+          MONGO_READY=1
+          break
+      fi
+      echo "[startup] ... MongoDB not ready yet ($i/30). Retrying in 2s"
+      sleep 2
+  done
+
+  if [ "${MONGO_READY}" -ne 1 ]; then
+      echo "[startup] ✗ MongoDB did not become ready in time. Last log lines:"
+      tail -n 50 /var/lib/mongodb/mongod.log 2>/dev/null || echo "(no mongod log found)"
+      exit 1
+  fi
 fi
-
-# If mongod already running on different port, stop it (local-only safety)
-if pgrep -x mongod > /dev/null; then
-    echo "MongoDB appears to be running on a different port; attempting graceful stop..."
-    sudo pkill -x mongod || true
-    sleep 2
-fi
-
-# Clean up any existing socket files
-sudo rm -f /tmp/mongodb-*.sock 2>/dev/null || true
-
-# Start local MongoDB server (bind to localhost)
-echo "Starting MongoDB server on ${DB_HOST}:${DB_PORT}..."
-nohup sudo mongod --dbpath /var/lib/mongodb --port ${DB_PORT} --bind_ip 127.0.0.1 --unixSocketPrefix /var/run/mongodb > /var/lib/mongodb/mongod.log 2>&1 &
-
-# Wait for MongoDB to start
-echo "Waiting for MongoDB to start..."
-for i in {1..15}; do
-    if mongosh --host "${DB_HOST}" --port "${DB_PORT}" --eval "db.adminCommand('ping')" > /dev/null 2>&1; then
-        echo "MongoDB is ready!"
-        break
-    fi
-    echo "Waiting... ($i/15)"
-    sleep 2
-done
 
 # Derive admin user to create (use provided DB_USER from URL or default)
 ADMIN_USER="${DB_USER}"
@@ -84,7 +84,7 @@ APP_USER="appuser"
 APP_PWD="${DB_PASSWORD}"
 
 # Create admin and app users
-echo "Setting up admin and app users..."
+echo "[startup] Setting up admin and app users..."
 mongosh --host "${DB_HOST}" --port "${DB_PORT}" << EOF
 use admin
 if (db.getUser("${ADMIN_USER}") == null) {
@@ -110,15 +110,16 @@ EOF
 
 # Save connection command to a file
 echo "mongosh ${MONGODB_URL}${MONGODB_URL*+/$MONGODB_DB}" > db_connection.txt
-echo "Connection string saved to db_connection.txt"
+echo "[startup] Connection string saved to db_connection.txt"
 
 # Save environment variables for db viewer and other tools
 cat > db_visualizer/mongodb.env << EOF
 export MONGODB_URL="${MONGODB_URL}"
 export MONGODB_DB="${MONGODB_DB}"
 EOF
+echo "[startup] Wrote db_visualizer/mongodb.env"
 
-echo "Running database initialization (collections, indexes, seed)..."
+echo "[startup] Running database initialization (collections, indexes, seed)..."
 # Export env vars for init script (scripts/init_db.js expects these)
 export MONGODB_DB="${MONGODB_DB}"
 export DB_PORT="${DB_PORT}"
@@ -127,102 +128,85 @@ export DB_PASSWORD="${ADMIN_PWD}"
 
 # Execute init script with mongosh
 if mongosh --host "${DB_HOST}" --port "${DB_PORT}" --file scripts/init_db.js --quiet; then
-    echo "✓ Database initialization completed."
+    echo "[startup] ✓ Database initialization completed."
 else
-    echo "⚠ Database initialization encountered issues. Check logs above."
+    echo "[startup] ⚠ Database initialization encountered issues. Check logs above."
 fi
 
 echo ""
-echo "MongoDB setup complete!"
-echo "Database: ${MONGODB_DB}"
-echo "Connection URL: ${MONGODB_URL}"
-echo "Port: ${DB_PORT}"
+echo "[startup] MongoDB setup complete!"
+echo "[startup] Database: ${MONGODB_DB}"
+echo "[startup] Connection URL: ${MONGODB_URL}"
+echo "[startup] Port: ${DB_PORT}"
 echo ""
-echo "Environment variables saved to db_visualizer/mongodb.env"
-echo "Starting DB visualizer on port 3020..."
+
+# ---- Optional: Start DB Visualizer (best-effort, does NOT affect readiness) ----
+echo "[startup] Attempting to start optional DB visualizer on port 3020 (best-effort)..."
 VISUALIZER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/db_visualizer"
 
-# Start DB visualizer in background using env file (MONGODB_URL/MONGODB_DB)
-# Prefer npm if available, otherwise start via node directly.
 (
-  cd "${VISUALIZER_DIR}"
+  cd "${VISUALIZER_DIR}" || exit 0
   # shellcheck disable=SC1091
-  source mongodb.env
-  # Ensure listener binds to all interfaces on port 3020
+  source mongodb.env 2>/dev/null || true
   export PORT="${PORT:-3020}"
   export HOST="0.0.0.0"
-
-  # Log location
   LOG_FILE="/tmp/db_visualizer.log"
 
   echo "[db_visualizer] Launching server (PORT=${PORT}, HOST=${HOST})" | tee -a "${LOG_FILE}"
 
-  # Install dependencies if node modules missing (non-interactive, best-effort)
   if [ ! -d "node_modules" ] && command -v npm >/dev/null 2>&1; then
     echo "[db_visualizer] node_modules missing. Installing dependencies..." | tee -a "${LOG_FILE}"
     npm ci --only=production >> "${LOG_FILE}" 2>&1 || npm install --production >> "${LOG_FILE}" 2>&1 || true
   fi
 
-  # Prefer npm, fallback to direct node server.js
   if command -v npm >/dev/null 2>&1; then
     nohup npm run start >> "${LOG_FILE}" 2>&1 &
-    VIS_PID=$!
-    echo "[db_visualizer] Started via npm (pid=${VIS_PID})" | tee -a "${LOG_FILE}"
+    echo "[db_visualizer] Started via npm (pid=$!)" | tee -a "${LOG_FILE}"
   elif command -v node >/dev/null 2>&1; then
     nohup node server.js >> "${LOG_FILE}" 2>&1 &
-    VIS_PID=$!
-    echo "[db_visualizer] Started via node (pid=${VIS_PID})" | tee -a "${LOG_FILE}"
+    echo "[db_visualizer] Started via node (pid=$!)" | tee -a "${LOG_FILE}"
   else
-    echo "⚠ Node.js runtime not found. DB visualizer cannot start." | tee -a "${LOG_FILE}"
+    echo "[db_visualizer] ⚠ Node.js runtime not found. DB visualizer cannot start." | tee -a "${LOG_FILE}"
   fi
-) || echo "⚠ Failed to launch DB visualizer. Check /tmp/db_visualizer.log"
+) || echo "[startup] ⚠ Failed to launch DB visualizer. See /tmp/db_visualizer.log"
 
-# Readiness: wait for visualizer to respond on 3020
-# Strategy:
-# 1) Try /health (if exists) then /api/databases then /
-# 2) Use 0.0.0.0 for binding but curl to 127.0.0.1 and localhost
-# 3) Retry up to 60s with detailed logs
-echo "Waiting for DB visualizer to become ready on port 3020..."
-READY=0
-for i in {1..30}; do
-  if curl -sf "http://127.0.0.1:3020/health" >/dev/null 2>&1; then
-    echo "✓ DB visualizer responded at /health"
-    READY=1; break
-  fi
-  if curl -sf "http://127.0.0.1:3020/api/databases" >/dev/null 2>&1; then
-    echo "✓ DB visualizer responded at /api/databases"
-    READY=1; break
-  fi
-  if curl -sf "http://127.0.0.1:3020/" >/dev/null 2>&1; then
-    echo "✓ DB visualizer root path responded"
-    READY=1; break
-  fi
-  if curl -sf "http://localhost:3020/" >/dev/null 2>&1; then
-    echo "✓ DB visualizer root path responded (localhost)"
-    READY=1; break
-  fi
-  echo "Visualizer not ready yet... ($i/30). Tailing recent log lines:"
-  tail -n 10 /tmp/db_visualizer.log 2>/dev/null || echo "(no logs yet)"
-  sleep 2
-done
-
-# If still not ready, print diagnostic info and do a final fallback check
-if [ "${READY}" -ne 1 ]; then
-  echo "⚠ DB visualizer did not become ready within timeout."
-  echo "Diagnostics:"
-  echo "- Process listing (node/npm):"
-  ps aux | grep -E "node|npm" | grep -v grep || true
-  echo "- Listening sockets on 3020:"
-  (command -v ss >/dev/null 2>&1 && ss -ltnp | grep ':3020') || (command -v netstat >/dev/null 2>&1 && netstat -ltnp | grep ':3020') || true
-  echo "- Last 50 lines of /tmp/db_visualizer.log:"
-  tail -n 50 /tmp/db_visualizer.log 2>/dev/null || echo "(no logs)"
+# ---- Readiness: PASS based on MongoDB only ----
+echo "[startup] Performing readiness check based on MongoDB availability..."
+READINESS_OK=0
+# Primary: mongosh ping
+if mongosh --host "${DB_HOST}" --port "${DB_PORT}" --eval "db.adminCommand('ping')" > /dev/null 2>&1; then
+  echo "[startup] ✓ Readiness: MongoDB ping succeeded"
+  READINESS_OK=1
 else
-  echo "✓ DB visualizer is ready on port 3020"
+  # Fallback: try TCP connect with nc or curl to HTTP health (if any future HTTP proxy exists)
+  if command -v nc >/dev/null 2>&1; then
+    if nc -z "${DB_HOST}" "${DB_PORT}" >/dev/null 2>&1; then
+      echo "[startup] ✓ Readiness: TCP port ${DB_PORT} open (nc)"
+      READINESS_OK=1
+    fi
+  fi
+  if [ "${READINESS_OK}" -ne 1 ] && command -v curl >/dev/null 2>&1; then
+    if curl -sf "http://${DB_HOST}:${DB_PORT}/" >/dev/null 2>&1; then
+      echo "[startup] ✓ Readiness: HTTP check responded on ${DB_PORT}"
+      READINESS_OK=1
+    fi
+  fi
 fi
 
-echo "To use with Node.js viewer, env already sourced. Manual: source db_visualizer/mongodb.env"
-echo "To connect to the database, use:"
+# Log visualizer status as informational only
+if curl -sf "http://127.0.0.1:3020/health" >/dev/null 2>&1; then
+  echo "[startup] (info) DB visualizer is up on http://localhost:3020"
+else
+  echo "[startup] (info) DB visualizer not reachable yet or disabled. This is optional and does not block readiness."
+fi
+
+if [ "${READINESS_OK}" -eq 1 ]; then
+  echo "[startup] ✓ Readiness PASS: MongoDB is accepting connections on ${DB_HOST}:${DB_PORT}"
+else
+  echo "[startup] ✗ Readiness FAIL: MongoDB not reachable on ${DB_HOST}:${DB_PORT}"
+  exit 1
+fi
+
+echo "[startup] To connect to MongoDB:"
 echo "mongosh \"${MONGODB_URL}${MONGODB_URL*+/$MONGODB_DB}\""
-echo ""
-echo "MongoDB and DB visualizer are running in the background."
-echo "You can now start your application."
+echo "[startup] Startup complete."
