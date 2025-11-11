@@ -237,16 +237,52 @@
     }
   }
 
-  // Seed or upsert stub_info document
+  // Seed or upsert stub_info documents (idempotent)
   function upsertStubInfo(db) {
     const coll = db.getCollection("stub_info");
-    // Upsert a simple ready marker document
+
+    // Optional: ensure an index to avoid duplicates if additional writers are added later
+    try {
+      coll.createIndex({ key: 1 }, { name: "uniq_key", unique: true });
+    } catch (e) {
+      // ignore if index creation races or already exists
+    }
+
+    // Keep original ready marker (backward compatible)
     coll.updateOne(
       { name: "ready" },
       { $set: { name: "ready", ts: new Date() } },
       { upsert: true }
     );
-    print("✓ stub_info upsert completed");
+
+    // Additional sample docs for smoke tests; keyed upserts for idempotency
+    const samples = [
+      { key: "sample-1", value: "ok", ts: new Date() },
+      { key: "sample-2", status: "green", ts: new Date() },
+      {
+        key: "sample-3",
+        meta: { env: (typeof process !== "undefined" && process.env && process.env.NODE_ENV) ? process.env.NODE_ENV : "dev" },
+        flags: ["bootstrap", "smoke-test"],
+        ts: new Date()
+      },
+      {
+        key: "sample-4",
+        description: "Example with nested metrics",
+        metrics: { requests: 0, errors: 0, uptimeSec: 0 },
+        ts: new Date()
+      }
+    ];
+
+    samples.forEach(doc => {
+      // Upsert by key so re-runs are safe
+      coll.updateOne(
+        { key: doc.key },
+        { $set: doc },
+        { upsert: true }
+      );
+    });
+
+    print("✓ stub_info upserts completed (ready marker + samples)");
   }
 
   try {
