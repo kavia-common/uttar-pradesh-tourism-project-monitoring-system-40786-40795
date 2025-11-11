@@ -1,0 +1,44 @@
+{
+  "roles": [
+    { "code": "ADMIN", "name": "Administrator", "permissions": ["*"] },
+    { "code": "PM", "name": "Project Manager", "permissions": ["projects:*", "milestones:*", "progress_logs:*", "documents:*", "payments:*", "reports:read"] },
+    { "code": "VIEWER", "name": "Viewer", "permissions": ["projects:read", "milestones:read", "progress_logs:read", "documents:read", "payments:read", "reports:read"] }
+  ],
+  "users": [
+    {
+      "email": "admin@example.com",
+      "name": "System Admin",
+      "password_hash": "$2b$12$9oH2sO6hQ1B0C6VnWZqOeO6H0bQ4i1F1kqvI1rNQqz1V8q1b1hG1i",
+      "roles": ["ADMIN"]
+    }
+  ],
+  "projects": [
+    {
+      "code": "PRJ-0001",
+      "name": "Heritage Walk Development",
+      "description": "Develop heritage walk with signages, lighting, and amenities.",
+      "status": "active",
+      "department": "Tourism",
+      "budget": 25000000,
+      "startDate": "2024-04-01T00:00:00.000Z",
+      "endDate": "2025-03-31T00:00:00.000Z",
+      "location": { "district": "Varanasi", "lat": 25.3176, "lng": 82.9739 }
+    }
+  ],
+  "milestones": [
+    { "projectCode": "PRJ-0001", "name": "DPR Approval", "status": "completed", "dueDate": "2024-05-01T00:00:00.000Z", "completionDate": "2024-04-28T00:00:00.000Z" },
+    { "projectCode": "PRJ-0001", "name": "Tender Awarded", "status": "in_progress", "dueDate": "2024-07-15T00:00:00.000Z" }
+  ],
+  "progress_logs": [
+    { "projectCode": "PRJ-0001", "date": "2024-06-01T00:00:00.000Z", "percentComplete": 10, "notes": "Site survey completed." }
+  ],
+  "documents": [
+    { "projectCode": "PRJ-0001", "title": "DPR.pdf", "type": "PDF", "url": "https://example.com/docs/dpr.pdf" }
+  ],
+  "payments": [
+    { "projectCode": "PRJ-0001", "date": "2024-06-10T00:00:00.000Z", "amount": 5000000, "status": "released", "reference": "NEFT-12345" }
+  ],
+  "reports": [
+    { "projectCode": "PRJ-0001", "type": "monthly_summary", "generatedAt": "2024-06-30T00:00:00.000Z", "payload": { "kpi": "on_track" } }
+  ]
+}

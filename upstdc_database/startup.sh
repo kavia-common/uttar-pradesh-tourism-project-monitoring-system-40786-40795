@@ -123,6 +123,21 @@ export MONGODB_URL="mongodb://${DB_USER}:${DB_PASSWORD}@localhost:${DB_PORT}/?au
 export MONGODB_DB="${DB_NAME}"
 EOF
 
+echo "Running database initialization (collections, indexes, seed)..."
+# Export env vars for init script
+export MONGODB_DB="${DB_NAME}"
+export DB_PORT="${DB_PORT}"
+export DB_USER="${DB_USER}"
+export DB_PASSWORD="${DB_PASSWORD}"
+
+# Execute init script with mongosh; it will connect using admin for index creation and appuser for seeding
+if mongosh --port ${DB_PORT} --file scripts/init_db.js --quiet; then
+    echo "✓ Database initialization completed."
+else
+    echo "⚠ Database initialization encountered issues. Check logs above."
+fi
+
+echo ""
 echo "MongoDB setup complete!"
 echo "Database: ${DB_NAME}"
 echo "Admin user: ${DB_USER} (password: ${DB_PASSWORD})"

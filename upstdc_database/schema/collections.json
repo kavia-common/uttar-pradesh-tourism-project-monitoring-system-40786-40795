@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "UPSTDC Project Monitoring MongoDB Collections",
+  "description": "Canonical collection definitions, fields, and indexes for the UPSTDC Project Monitoring System.",
+  "version": "1.0.0",
+  "collections": [
+    {
+      "name": "users",
+      "description": "Application users including admins, PMs, auditors.",
+      "fields": {
+        "_id": { "type": "objectId", "description": "MongoDB ObjectId" },
+        "email": { "type": "string", "format": "email", "description": "Unique email address (login id)" },
+        "password_hash": { "type": "string", "description": "Argon2/bcrypt password hash" },
+        "name": { "type": "string", "description": "Full name" },
+        "roleIds": { "type": "array", "items": { "type": "objectId" }, "description": "References to roles._id" },
+        "status": { "type": "string", "enum": ["active", "disabled"], "default": "active" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "indexes": [
+        { "keys": { "email": 1 }, "options": { "unique": true, "name": "uniq_email" } }
+      ]
+    },
+    {
+      "name": "roles",
+      "description": "Role catalog with permissions.",
+      "fields": {
+        "_id": { "type": "objectId" },
+        "code": { "type": "string", "description": "Unique role code e.g., ADMIN, PM, VIEWER" },
+        "name": { "type": "string" },
+        "permissions": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "indexes": [
+        { "keys": { "code": 1 }, "options": { "unique": true, "name": "uniq_code" } }
+      ]
+    },
+    {
+      "name": "projects",
+      "description": "Tourism projects across districts.",
+      "fields": {
+        "_id": { "type": "objectId" },
+        "code": { "type": "string", "description": "Unique project code" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "status": { "type": "string", "enum": ["draft", "active", "completed", "on_hold", "cancelled"] },
+        "department": { "type": "string" },
+        "budget": { "type": "number" },
+        "startDate": { "type": "string", "format": "date-time" },
+        "endDate": { "type": "string", "format": "date-time" },
+        "location": {
+          "type": "object",
+          "properties": {
+            "district": { "type": "string" },
+            "lat": { "type": "number" },
+            "lng": { "type": "number" }
+          }
+        },
+        "createdBy": { "type": "objectId", "description": "users._id" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "indexes": [
+        { "keys": { "code": 1 }, "options": { "unique": true, "name": "uniq_project_code" } }
+      ]
+    },
+    {
+      "name": "milestones",
+      "description": "Project milestones with expected/actual dates.",
+      "fields": {
+        "_id": { "type": "objectId" },
+        "projectId": { "type": "objectId", "description": "projects._id" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "dueDate": { "type": "string", "format": "date-time" },
+        "completionDate": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["not_started", "in_progress", "completed", "delayed"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "indexes": [
+        { "keys": { "projectId": 1 }, "options": { "name": "idx_milestones_projectId" } }
+      ]
+    },
+    {
+      "name": "progress_logs",
+      "description": "Periodic project progress entries.",
+      "fields": {
+        "_id": { "type": "objectId" },
+        "projectId": { "type": "objectId", "description": "projects._id" },
+        "date": { "type": "string", "format": "date-time" },
+        "percentComplete": { "type": "number" },
+        "notes": { "type": "string" },
+        "geo": {
+          "type": "object",
+          "properties": {
+            "lat": { "type": "number" },
+            "lng": { "type": "number" }
+          }
+        },
+        "createdBy": { "type": "objectId", "description": "users._id" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "indexes": [
+        { "keys": { "projectId": 1, "date": -1 }, "options": { "name": "idx_progress_project_date" } }
+      ]
+    },
+    {
+      "name": "documents",
+      "description": "Document metadata; binary stored externally (S3, etc.).",
+      "fields": {
+        "_id": { "type": "objectId" },
+        "projectId": { "type": "objectId" },
+        "title": { "type": "string" },
+        "type": { "type": "string", "description": "e.g., PDF, Image, Report" },
+        "url": { "type": "string", "description": "External storage URL" },
+        "uploadedBy": { "type": "objectId", "description": "users._id" },
+        "uploadedAt": { "type": "string", "format": "date-time" }
+      },
+      "indexes": [
+        { "keys": { "projectId": 1 }, "options": { "name": "idx_documents_projectId" } }
+      ]
+    },
+    {
+      "name": "payments",
+      "description": "Payment records made for projects.",
+      "fields": {
+        "_id": { "type": "objectId" },
+        "projectId": { "type": "objectId" },
+        "date": { "type": "string", "format": "date-time" },
+        "amount": { "type": "number" },
+        "status": { "type": "string", "enum": ["initiated", "approved", "released", "failed"] },
+        "reference": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "indexes": [
+        { "keys": { "projectId": 1, "date": -1 }, "options": { "name": "idx_payments_project_date" } }
+      ]
+    },
+    {
+      "name": "reports",
+      "description": "Generated analytics and scheduled reports.",
+      "fields": {
+        "_id": { "type": "objectId" },
+        "projectId": { "type": "objectId" },
+        "type": { "type": "string", "description": "e.g., monthly_summary" },
+        "generatedAt": { "type": "string", "format": "date-time" },
+        "payload": { "type": "object" }
+      },
+      "indexes": [
+        { "keys": { "projectId": 1, "generatedAt": -1 }, "options": { "name": "idx_reports_project_generated" } }
+      ]
+    },
+    {
+      "name": "audit_logs",
+      "description": "Audit trail for compliance.",
+      "fields": {
+        "_id": { "type": "objectId" },
+        "entity": { "type": "string", "description": "collection or module name" },
+        "entityId": { "type": ["objectId", "string"] },
+        "action": { "type": "string", "description": "create/update/delete/login/etc." },
+        "actorId": { "type": "objectId" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "diff": { "type": "object" }
+      },
+      "indexes": [
+        { "keys": { "entity": 1, "entityId": 1, "timestamp": -1 }, "options": { "name": "idx_audit_entity_ts" } },
+        { "keys": { "actorId": 1, "timestamp": -1 }, "options": { "name": "idx_audit_actor_ts" } }
+      ]
+    }
+  ]
+}
