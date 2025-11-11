@@ -62,7 +62,8 @@ else
   MONGO_READY=0
   for i in {1..30}; do
       if mongosh --host "${DB_HOST}" --port "${DB_PORT}" --eval "db.adminCommand('ping')" > /dev/null 2>&1; then
-          echo "[startup] ✓ MongoDB is ready (ping succeeded)"
+          echo "[startup] ✓ MongoDB ready"
+          echo "[startup] MongoDB ready"  # explicit log as requested
           MONGO_READY=1
           break
       fi
@@ -119,15 +120,13 @@ export MONGODB_DB="${MONGODB_DB}"
 EOF
 echo "[startup] Wrote db_visualizer/mongodb.env"
 
-echo "[startup] Running database initialization (collections, indexes, seed)..."
+echo "[startup] Running database initialization (collections, indexes, seed, stub_info upsert)..."
 # Export env vars for init script (scripts/init_db.js expects these)
 export MONGODB_DB="${MONGODB_DB}"
-export DB_PORT="${DB_PORT}"
-export DB_USER="${ADMIN_USER}"
-export DB_PASSWORD="${ADMIN_PWD}"
+export MONGODB_URL="${MONGODB_URL}"
 
 # Execute init script with mongosh
-if mongosh --host "${DB_HOST}" --port "${DB_PORT}" --file scripts/init_db.js --quiet; then
+if mongosh --file scripts/init_db.js --quiet; then
     echo "[startup] ✓ Database initialization completed."
 else
     echo "[startup] ⚠ Database initialization encountered issues. Check logs above."
@@ -142,6 +141,7 @@ echo ""
 
 # ---- Optional: Start DB Visualizer (best-effort, does NOT affect readiness) ----
 echo "[startup] Attempting to start optional DB visualizer on port 3020 (best-effort)..."
+echo "[startup] Visualizer is optional; not required for readiness."
 VISUALIZER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/db_visualizer"
 
 (
@@ -171,39 +171,26 @@ VISUALIZER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/db_visualizer"
 ) || echo "[startup] ⚠ Failed to launch DB visualizer. See /tmp/db_visualizer.log"
 
 # ---- Readiness: PASS based on MongoDB only ----
-echo "[startup] Performing readiness check based on MongoDB availability..."
+echo "[startup] Performing readiness check based solely on MongoDB availability..."
 READINESS_OK=0
-# Primary: mongosh ping
-if mongosh --host "${DB_HOST}" --port "${DB_PORT}" --eval "db.adminCommand('ping')" > /dev/null 2>&1; then
+# Primary: mongosh ping using provided URL/DB
+if mongosh "${MONGODB_URL}${MONGODB_URL*+/$MONGODB_DB}" --eval "db.runCommand({ ping: 1 })" > /dev/null 2>&1; then
   echo "[startup] ✓ Readiness: MongoDB ping succeeded"
+  echo "[startup] MongoDB ready"
   READINESS_OK=1
-else
-  # Fallback: try TCP connect with nc or curl to HTTP health (if any future HTTP proxy exists)
-  if command -v nc >/dev/null 2>&1; then
-    if nc -z "${DB_HOST}" "${DB_PORT}" >/dev/null 2>&1; then
-      echo "[startup] ✓ Readiness: TCP port ${DB_PORT} open (nc)"
-      READINESS_OK=1
-    fi
-  fi
-  if [ "${READINESS_OK}" -ne 1 ] && command -v curl >/dev/null 2>&1; then
-    if curl -sf "http://${DB_HOST}:${DB_PORT}/" >/dev/null 2>&1; then
-      echo "[startup] ✓ Readiness: HTTP check responded on ${DB_PORT}"
-      READINESS_OK=1
-    fi
-  fi
 fi
 
-# Log visualizer status as informational only
+# Informational status of visualizer only (not used for readiness)
 if curl -sf "http://127.0.0.1:3020/health" >/dev/null 2>&1; then
   echo "[startup] (info) DB visualizer is up on http://localhost:3020"
 else
-  echo "[startup] (info) DB visualizer not reachable yet or disabled. This is optional and does not block readiness."
+  echo "[startup] (info) Visualizer is optional; not required for readiness."
 fi
 
 if [ "${READINESS_OK}" -eq 1 ]; then
-  echo "[startup] ✓ Readiness PASS: MongoDB is accepting connections on ${DB_HOST}:${DB_PORT}"
+  echo "[startup] ✓ Readiness PASS: MongoDB is accepting connections"
 else
-  echo "[startup] ✗ Readiness FAIL: MongoDB not reachable on ${DB_HOST}:${DB_PORT}"
+  echo "[startup] ✗ Readiness FAIL: MongoDB not reachable via provided URL"
   exit 1
 fi
 
