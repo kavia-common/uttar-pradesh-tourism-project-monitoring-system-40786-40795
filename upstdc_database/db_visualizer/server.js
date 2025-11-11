@@ -338,9 +338,10 @@ const envInfo = {
   MongoDB: 'MONGODB_URL, MONGODB_DB'
 };
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Database viewer running on http://localhost:${PORT}`);
+const PORT = process.env.PORT || 3020;
+const HOST = process.env.HOST || '0.0.0.0';
+app.listen(PORT, HOST, () => {
+  console.log(`Database viewer running on http://${HOST}:${PORT}`);
   console.log('\nEnvironment variables expected:');
   Object.entries(envInfo).forEach(([db, vars]) => {
     console.log(`${db}: ${vars}`);

@@ -139,9 +139,38 @@ echo "Connection URL: ${MONGODB_URL}"
 echo "Port: ${DB_PORT}"
 echo ""
 echo "Environment variables saved to db_visualizer/mongodb.env"
-echo "To use with Node.js viewer, run: source db_visualizer/mongodb.env"
+echo "Starting DB visualizer on port 3020..."
+VISUALIZER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/db_visualizer"
+
+# Start DB visualizer in background using env file (MONGODB_URL/MONGODB_DB)
+# Prefer npm if available, otherwise start via node directly.
+(
+  cd "${VISUALIZER_DIR}"
+  # shellcheck disable=SC1091
+  source mongodb.env
+  export PORT="${PORT:-3020}"
+  export HOST="0.0.0.0"
+  if command -v npm >/dev/null 2>&1; then
+    nohup npm run start >/tmp/db_visualizer.log 2>&1 &
+  else
+    nohup node server.js >/tmp/db_visualizer.log 2>&1 &
+  fi
+) || echo "⚠ Failed to launch DB visualizer. Check /tmp/db_visualizer.log"
+
+# Readiness: wait for visualizer to respond on 3020 (max ~30s)
+echo "Waiting for DB visualizer to become ready on port 3020..."
+for i in {1..15}; do
+  if curl -sSf "http://127.0.0.1:3020/api/databases" >/dev/null 2>&1; then
+    echo "✓ DB visualizer is ready on port 3020"
+    break
+  fi
+  echo "Visualizer not ready yet... ($i/15)"
+  sleep 2
+done
+
+echo "To use with Node.js viewer, env already sourced. Manual: source db_visualizer/mongodb.env"
 echo "To connect to the database, use:"
 echo "mongosh \"${MONGODB_URL}${MONGODB_URL*+/$MONGODB_DB}\""
 echo ""
-echo "MongoDB is running in the background."
+echo "MongoDB and DB visualizer are running in the background."
 echo "You can now start your application."
